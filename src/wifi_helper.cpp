@@ -27,6 +27,7 @@
 #include <ESPmDNS.h>
 #include <TickerUsESP32.h>
 #include <tuple>
+#include "esp_wifi.h"
 
 const long PORTAL_TIMEOUT = 300000; // 5 minuten = 300.000 ms
 const uint32_t WIFI_NOTIFY_GOT_IP = BIT0;
@@ -172,7 +173,17 @@ static void runConfigPortal(const std::string& ssid, bool hasWifiConfiguration) 
         Serial.println("WiFi: No WiFi network configured, opening Config Portal...");
     }
 
+    // 1. Zwinge die Antenne wach zu bleiben
+    WiFi.setSleep(false);
+    
+    // 2. Zwinge das Modul explizit in den gemischten Modus, BEVOR der WiFiManager greift
+    WiFi.mode(WIFI_AP_STA);
+    // --- HARDWARE WAKEUP FIXES ENDE ---
+
     WiFiManager wm;
+
+    // 3. Wechsle den Funkkanal auf 6 (Kanal 1 crasht beim C3 oft stillschweigend)
+    //wm.setConfigPortalChannel(6);
 
     applyAdvancedWiFiSettings();
     wm.setConfigPortalBlocking(false);
@@ -221,8 +232,10 @@ static void runConfigPortal(const std::string& ssid, bool hasWifiConfiguration) 
     clearDisplayMessages();
 }
 
-static void wifiWorker(void * pvParameters) {
+/*static void wifiWorker(void * pvParameters) {
     wl_status_t status = WL_DISCONNECTED;
+
+    WiFi.setSleep(false);
 
     WiFi.mode(WIFI_STA);
 
@@ -260,6 +273,84 @@ static void wifiWorker(void * pvParameters) {
             handleWifiConnected();
         }
     }
+}*/
+
+static void wifiWorker(void * pvParameters) {
+    WiFi.setSleep(false);
+    WiFi.mode(WIFI_STA);
+    // Begrenze auf 802.11b/g (deaktiviert 802.11n/ax Features)
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G);
+    
+    // Deaktiviere 40MHz-Modus (erzwingt 20MHz, was die FritzBox bei "Datenrate nicht kompatibel" oft verlangt)
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);   // WICHTIG – auch bei gutem Signal!
+
+    Serial.println("WiFi: Starte Scan...");
+    int n = WiFi.scanNetworks();
+
+    WiFi.disconnect(true, true);   // Vollständiges Disconnect
+
+    const char* ssid = "UNSERNETZ MY";  // oder dein neues IoT-Netz
+    const char* password = "PW";
+
+    WiFi.begin(ssid, password);
+
+    delay(500);  // länger
+
+    // Erweiterter Fix
+    wifi_config_t conf;
+    if (esp_wifi_get_config(WIFI_IF_STA, &conf) == ESP_OK) {
+        conf.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        conf.sta.pmf_cfg.capable = false;
+        conf.sta.pmf_cfg.required = false;
+        conf.sta.threshold.rssi = -60;        // nur bei sehr gutem Signal
+        esp_wifi_set_config(WIFI_IF_STA, &conf);
+        Serial.println("→ Erweiterter PMF + WPA2 Fix");
+    }
+        // =====================
+
+    int retries = 0;
+    while (WiFi.status() != WL_CONNECTED && retries < 60) {  // länger warten
+        vTaskDelay(pdMS_TO_TICKS(500));
+        Serial.print(".");
+        retries++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi: Erfolgreich verbunden!");
+        Serial.print("IP: "); Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("\nVerbindung fehlgeschlagen.");
+        Serial.printf("Letzter Status: %d\n", WiFi.status());
+    }
+    // ... Rest bleibt gleich
+
+    
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi: Erfolgreich verbunden!");
+        Serial.print("WiFi: IP-Adresse: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("\nWiFi: Verbindung fehlgeschlagen nach 15 Sekunden.");
+    }
+
+    uint32_t events = 0;
+    while (true) {
+        xTaskNotifyWait(0, UINT32_MAX, &events, portMAX_DELAY);
+
+        if ((events & WIFI_NOTIFY_DISCONNECTED) != 0) {
+            handleWifiDisconnected();
+            Serial.println("Reconnecting...");
+            WiFi.disconnect();
+            WiFi.begin(ssid, password);
+        }
+
+        if ((events & WIFI_NOTIFY_GOT_IP) != 0 &&
+            wifiStatus.connectionStatus != ConnState::Connected) {
+            handleWifiConnected();
+        }
+    }
 }
 
 static void onWiFiEvent(WiFiEvent_t event) {
@@ -287,7 +378,8 @@ void initWifi() {
     // including after auto-reconnects where the connect task never runs.
     WiFi.setHostname("MiOpenIO");
 
-    xTaskCreatePinnedToCore(wifiWorker, "WiFi_Worker", 8192, NULL, 3, &wifiWorkerTaskHandle, 1);
+    //xTaskCreatePinnedToCore(wifiWorker, "WiFi_Worker", 8192, NULL, 3, &wifiWorkerTaskHandle, 1);
+    xTaskCreatePinnedToCore(wifiWorker, "WiFi_Worker", 8192, NULL, 3, &wifiWorkerTaskHandle, 0);
 
     WiFi.onEvent(onWiFiEvent);
     WiFi.setAutoReconnect(true);

@@ -46,7 +46,7 @@
 #include <web_server_handler.h>
 #endif
 #include "LittleFS.h"
-//#include <WiFi.h> // Assuming WiFi is used and initialized elsewhere or will be here.
+#include <WiFi.h> // Assuming WiFi is used and initialized elsewhere or will be here.
 
 
 #include <user_config.h>
@@ -102,7 +102,7 @@ void setup() {
     esp_log_level_set("*", ESP_LOG_DEBUG);    // Or VERBOSE for ESP_LOGV
 
     Serial.printf("Firmware version: %s\n", firmwareVersion());
-
+    
 
     initDisplay(); // Init OLED display
 

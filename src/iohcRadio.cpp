@@ -96,7 +96,15 @@ namespace IOHC {
         // Notify de RX state machine
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         vTaskNotifyGiveFromISR(handle_interrupt, &xHigherPriorityTaskWoken);
+        #if defined(ESP32C3)
+        // RISC-V Architektur (ESP32-C3): Makro nimmt keine Argumente
+        if (xHigherPriorityTaskWoken == pdTRUE) {
+            portYIELD_FROM_ISR();
+        }
+        #else
+        // Xtensa Architektur (Heltec / LilyGo): Klassischer Aufruf mit Argument
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        #endif
     }
 
     void callbackTaskLoop(void *parameters) {

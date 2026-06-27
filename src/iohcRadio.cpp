@@ -70,10 +70,12 @@ namespace IOHC {
      * the interrupt service routine is complete.
      */
     void IRAM_ATTR handle_interrupt_fromisr() {
+
+        if (handle_interrupt == NULL) return;
         bool preamble = digitalRead(RADIO_PREAMBLE_DETECTED);
         bool payload = digitalRead(RADIO_PACKET_AVAIL);
         iohcRadio::txComplete = true;
-        ets_printf("TX: TX-RX DONE detected, flag set\n");
+        //ets_printf("TX: TX-RX DONE detected, flag set\n");
 
 
         if (payload) {
@@ -150,6 +152,9 @@ namespace IOHC {
             return;
         }
 
+        printf("Waiting for stabilization...\n");
+        delay(500); // 5 Sekunden Pause zum Stabilisieren
+ 
         // start state machine
         printf("Starting Interrupt Handler...\n");
         BaseType_t task_code = xTaskCreatePinnedToCore(handle_interrupt_task, "handle_interrupt_task", 8192,
@@ -223,6 +228,10 @@ namespace IOHC {
  * scenarios:
  */
     void IRAM_ATTR iohcRadio::tickerCounter(iohcRadio *radio) {
+
+    // Sicherung: Verhindere Zugriff, wenn das Objekt noch nicht bereit ist
+    if (radio == nullptr) return;
+
         // Not need to put in IRAM as we reuse task for µs instead ISR
 #if defined(RADIO_SX127X)
         Radio::readBytes(REG_IRQFLAGS1, _flags, sizeof(_flags));

@@ -133,7 +133,7 @@
 #define RADIO_PREAMBLE_DETECTED                 RADIO_DIO_4     // Preamble detected from Radio (used instead of FIFO empty)
 #endif
 
-#define SPI_CLK_FRQ                                 10000000
+#define SPI_CLK_FRQ                                 1000000
 
 /*
  * Defines the time required for the TCXO to wakeup [ms].

@@ -91,6 +91,11 @@ static void handleWifiConnected() {
         wifiStatus.rssi = WiFi.RSSI();
         wifiStatus.signalStrengthPercent = rssiToQuality(wifiStatus.rssi);
 
+        if (WiFi.getMode() == WIFI_AP_STA) {
+            Serial.println("WiFi: Verbindung steht. Schalte AP-Modus aus.");
+            WiFi.mode(WIFI_STA);
+        }
+
         wifiReconnectTimer.detach();
         rssiTimer.attach(5, rssiTimerCb);
         updateDisplayStatus();

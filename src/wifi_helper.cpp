@@ -44,6 +44,7 @@ WiFiStatus wifiStatus = { ConnState::Disconnected, 0, 0 };
 TaskHandle_t wifiWorkerTaskHandle = NULL;
 bool mdnsStarted = false;
 bool webServerStarted = false;
+static int wifiRetryCounter = 0;
 
 // Replicate WiFiManager::getRSSIasQuality() without constructing a WiFiManager object.
 static int rssiToQuality(int rssi) {
@@ -176,9 +177,20 @@ static std::string getConfiguredPassword() {
 static void triggerWiFiReconnect() {
     if (WiFi.status() != WL_CONNECTED) {
         Serial.println("WiFi: Trigger WiFi reconnect...");
-        applyAdvancedWiFiSettings(); 
         WiFi.mode(WIFI_STA); 
-        WiFi.begin();
+        
+        std::string ssid = getConfiguredSSID();
+        std::string pass = getConfiguredPassword();
+
+        if (!ssid.empty()) {
+            WiFi.begin(ssid.c_str(), pass.c_str());
+        } else {
+            WiFi.begin();
+        }
+        
+        // Exakt wie in deinem funktionierenden Code: Erst warten, dann patchen
+        delay(500);
+        applyAdvancedWiFiSettings(); 
     }
 }
 
@@ -262,31 +274,41 @@ static void runConfigPortal(const std::string& ssid, bool hasWifiConfiguration) 
 static void wifiWorker(void * pvParameters) {
     wl_status_t status = WL_DISCONNECTED;
 
-    WiFi.mode(WIFI_STA);
-    
-// 1. ZUERST den sauberen Zustand herstellen
-    #ifdef ESP32C3
-        WiFi.setSleep(false);
-        WiFi.setTxPower(WIFI_POWER_8_5dBm);
-        esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G);
-        esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
-        WiFi.disconnect(true, true);
-        delay(100);
-    #endif
-
+    // 1. ZUERST das Gedächtnis auslesen, bevor wir irgendwas machen!
     const std::string ssid = getConfiguredSSID();
+    const std::string pass = getConfiguredPassword();
     const bool hasWifiConfiguration = !ssid.empty();
+
+    // 2. Hardware vorbereiten
+#ifdef ESP32C3
+    WiFi.setSleep(false);
+    WiFi.mode(WIFI_STA);
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G);
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+    WiFi.setTxPower(WIFI_POWER_8_5dBm);
     
+    Serial.println("WiFi: Starte Dummy-Scan zur RF-Kalibrierung...");
+    WiFi.scanNetworks();
+    
+    // WICHTIG: Nur (false, false) nutzen! (true, true) formatiert den WLAN-Speicher!
+    WiFi.disconnect(true, false);
+    delay(100);
+#else
+    WiFi.mode(WIFI_STA);
+#endif
+
     if (hasWifiConfiguration) {
+        // 3. Explizite Übergabe der geretteten Zugangsdaten
+        WiFi.begin(ssid.c_str(), pass.c_str());
+
+        // 4. Warten und dann die FritzBox-Fixes drüberbügeln
+        delay(500);
         applyAdvancedWiFiSettings();
-        
-        // Das Original: Verbindet sich mit den Tresor-Daten
-        WiFi.begin();
 
         Serial.printf("WiFi: Attempt connection to '%s', try for max 30 seconds...\n", ssid.c_str());
         status = (wl_status_t)WiFi.waitForConnectResult(30000);
-    }
-    if (status != WL_CONNECTED) {
+    } else {
+        // Nur wenn WIRKLICH nichts da ist, AP aufmachen
         runConfigPortal(ssid, hasWifiConfiguration);
     }
 
@@ -303,11 +325,28 @@ static void wifiWorker(void * pvParameters) {
         }
 
         if ((events & WIFI_NOTIFY_RECONNECT) != 0) {
-            triggerWiFiReconnect();
+            wifiRetryCounter++; // Zähler erhöhen
+            
+            if (wifiRetryCounter >= 10) {
+                Serial.println("WiFi: 10 Fehlversuche! Starte Fallback Config-Portal...");
+                wifiRetryCounter = 0; 
+                
+                const std::string currentSsid = getConfiguredSSID();
+                runConfigPortal(currentSsid, !currentSsid.empty());
+                
+                if (WiFi.status() != WL_CONNECTED) {
+                    configureWifiDisconnected(); 
+                }
+            } else {
+                Serial.printf("WiFi: Reconnect Versuch %d von 10\n", wifiRetryCounter);
+                triggerWiFiReconnect();
+            }
         }
 
         if ((events & WIFI_NOTIFY_GOT_IP) != 0 &&
             wifiStatus.connectionStatus != ConnState::Connected) {
+            
+            wifiRetryCounter = 0; // Zähler bei Erfolg sofort nullen!
             handleWifiConnected();
         }
     }
